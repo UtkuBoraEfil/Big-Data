@@ -1,4 +1,12 @@
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import avg
+
+from pymongo import MongoClient
+
+def get_db():
+    client = MongoClient("mongodb://localhost/")
+    return client["car_insurance"]
+
 
 spark = SparkSession.builder \
     .appName("Car Insurance Analysis") \
@@ -129,6 +137,42 @@ avg_outcome_by_age.write \
     .mode("overwrite") \
     .option("collection", "avg_outcome_by_age") \
     .save()
+
+df.groupBy("VEHICLE_TYPE").avg("OUTCOME") \
+    .withColumnRenamed("avg(OUTCOME)", "AVG_OUTCOME") \
+    .write \
+    .format("mongodb") \
+    .mode("overwrite") \
+    .option("collection", "analysis_outcome_by_vehicle_type") \
+    .save()
+
+
+
+vehicle_outcomes = df.groupBy("VEHICLE_TYPE").agg(avg("OUTCOME").alias("AVG_OUTCOME"))
+vehicle_outcomes_pd = vehicle_outcomes.toPandas()
+records = vehicle_outcomes_pd.to_dict(orient="records")
+if records:
+    collection = get_db()["vehicle_outcomes"]
+    collection.delete_many({})
+    collection.insert_many(records)
+
+
+speeding_by_exp = df.groupBy("DRIVING_EXPERIENCE").agg(avg("SPEEDING_VIOLATIONS").alias("AVG_SPEEDING"))
+speeding_by_exp_pd = speeding_by_exp.toPandas()
+records = speeding_by_exp_pd.to_dict(orient="records")
+if records:
+    collection = get_db()["speeding_by_experience"]
+    collection.delete_many({})
+    collection.insert_many(records)
+
+
+dui_outcomes = df.groupBy("DUIS").agg(avg("OUTCOME").alias("AVG_OUTCOME"))
+dui_outcomes_pd = dui_outcomes.toPandas()
+records = dui_outcomes_pd.to_dict(orient="records")
+if records:
+    collection = get_db()["dui_outcomes"]
+    collection.delete_many({})
+    collection.insert_many(records)
 
 
 # 6. Show data samples

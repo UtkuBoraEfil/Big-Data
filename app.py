@@ -45,14 +45,22 @@ def train_model(df):
     return model, X.columns.tolist(), mse, r2
 
 # Turkish market price adjustment
-def adjust_price(base_price, user_data):
-    base_tl = base_price * 0.25
+def adjust_price(base_risk_score, user_data):
+    # Convert risk score (0–1) into price (TRY)
+    base_price = 10000 + (base_risk_score * 20000)  # Between ₺10k–₺30k
     factors = 1.0
+
     if user_data.get("AGE", 30) < 25:
         factors += 0.1
     if user_data.get("PAST_ACCIDENTS", 0) > 0:
         factors += 0.1 * user_data["PAST_ACCIDENTS"]
-    return round(base_tl * factors * random.uniform(0.98, 1.02), 2)
+    if user_data.get("SPEEDING_VIOLATIONS", 0) > 0:
+        factors += 0.05 * user_data["SPEEDING_VIOLATIONS"]
+    if user_data.get("DUIS", 0) > 0:
+        factors += 0.2 * user_data["DUIS"]
+
+    return round(base_price * factors * random.uniform(0.98, 1.02), 2)
+
 
 # Load MongoDB analysis results
 def load_analysis_results():
@@ -99,6 +107,10 @@ def main():
         for title, table in analysis_data.items():
             with st.expander(title.replace("analysis_", "").upper()):
                 st.dataframe(table)
+
+                # Add chart if 2 columns and second is numeric
+                if table.shape[1] == 2 and pd.api.types.is_numeric_dtype(table.iloc[:, 1]):
+                    st.bar_chart(table.set_index(table.columns[0]))
     else:
         st.info("No analysis data found in MongoDB. Run Spark jobs first.")
 
