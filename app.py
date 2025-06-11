@@ -1,4 +1,6 @@
 import streamlit as st
+st.set_page_config(page_title="Car Insurance System", layout="wide")
+
 from pymongo import MongoClient
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -6,6 +8,9 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import mean_squared_error, r2_score
 import random
+import joblib
+from kafka import KafkaProducer
+import json
 
 # Connect to MongoDB (raw data and analysis results)
 def get_mongo_client():
@@ -46,8 +51,7 @@ def train_model(df):
 
 # Turkish market price adjustment
 def adjust_price(base_risk_score, user_data):
-    # Convert risk score (0–1) into price (TRY)
-    base_price = 10000 + (base_risk_score * 20000)  # Between ₺10k–₺30k
+    base_price = 10000 + (base_risk_score * 20000)
     factors = 1.0
 
     if user_data.get("AGE", 30) < 25:
@@ -61,7 +65,6 @@ def adjust_price(base_risk_score, user_data):
 
     return round(base_price * factors * random.uniform(0.98, 1.02), 2)
 
-
 # Load MongoDB analysis results
 def load_analysis_results():
     results = {}
@@ -70,9 +73,21 @@ def load_analysis_results():
             results[col_name] = pd.DataFrame(list(get_collection(col_name).find())).drop(columns=['_id'], errors='ignore')
     return results
 
+# Kafka setup
+producer = KafkaProducer(
+    bootstrap_servers='localhost:9092',
+    value_serializer=lambda v: json.dumps(v).encode('utf-8')
+)
+
+def send_kafka_event(data):
+    try:
+        producer.send("insurance_predictions", value=data)
+        producer.flush()
+    except Exception as e:
+        st.warning(f"Kafka send failed: {e}")
+
 # Main Streamlit App
 def main():
-    st.set_page_config(page_title="Car Insurance System", layout="wide")
     st.title("🚗 Car Insurance Prediction System")
 
     df = load_data()
@@ -100,6 +115,12 @@ def main():
         price = adjust_price(base, user_data)
         st.success(f"Estimated Insurance Price (TRY): ₺{price:,.2f}")
 
+        # 🔁 Send to Kafka
+        send_kafka_event({
+            **user_data,
+            "prediction": price
+        })
+
     st.markdown("---")
     st.subheader("2. Veri Analizi (MongoDB Sonuçları)")
     analysis_data = load_analysis_results()
@@ -107,12 +128,18 @@ def main():
         for title, table in analysis_data.items():
             with st.expander(title.replace("analysis_", "").upper()):
                 st.dataframe(table)
-
-                # Add chart if 2 columns and second is numeric
                 if table.shape[1] == 2 and pd.api.types.is_numeric_dtype(table.iloc[:, 1]):
                     st.bar_chart(table.set_index(table.columns[0]))
     else:
         st.info("No analysis data found in MongoDB. Run Spark jobs first.")
+
+    st.subheader("3. Past Predictions (via Kafka)")
+    if st.button("🔄 Load Kafka Predictions"):
+        past_preds = list(get_collection("kafka_predictions").find().sort("_id", -1))
+        if past_preds:
+            st.dataframe(pd.DataFrame(past_preds).drop(columns=["_id"]))
+        else:
+            st.info("No predictions saved yet.")
 
 if __name__ == "__main__":
     main()
